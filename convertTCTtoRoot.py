@@ -1,28 +1,40 @@
+import argparse
+import os
+
 import uproot
 import numpy as np
 import awkward as ak
 
-input_file = "../data/CNM/W4/H21/TCT/2026_09_25_16_17_52_CNM_18399_W4_H21.txt.root"
-output_file = "../data/CNM/W4/H21/TCT/2026_09_25_16_17_52_CNM_18399_W4_H21.root"
+parser = argparse.ArgumentParser(description="Convert an edge_tree TCT file into a waves TTree.")
+parser.add_argument("input_file", help="Input file ending in .txt.root")
+args = parser.parse_args()
 
-branch_map = {
-    "event": "event",
-    "volt": "ch1",
-    "time": "time",
+input_file = args.input_file
+if not input_file.endswith(".txt.root"):
+    parser.error(f"Input file must end in .txt.root: {input_file}")
+output_file = input_file[:-len(".txt.root")] + ".root"
+if not os.path.isfile(input_file):
+    parser.error(f"Input file not found: {input_file}")
+
+scalar_branches = {
+    "x": "raw/x",
+    "y": "raw/y",
+    "z": "raw/z",
+    "Vbias": "raw/Vbias",
+    "Itot": "raw/Itot",
+    "Temp": "raw/Temp",
+    "LPower": "proc/LPower",
+    "LPower2": "proc/LPower2",
+    "LNph": "proc/LNph",
+    "PVOA": "proc/PVOA",
 }
 
-# 3. Open the input file and extract the data
 with uproot.open(input_file) as infile:
-    tree = infile["ch0"]["raw"]
-    # Read all branches into an awkward array record
-    original_data = tree.arrays(library="ak")
-
-event_data = original_data["event"]
-x_data = original_data["x"]
-y_data = original_data["y"]
-bias_data = original_data["Vbias"]
-volt_np = ak.to_numpy(original_data["volt"])
-time_np = ak.to_numpy(original_data["time"])
+    tree = infile["ch0"]
+    event_data = tree["raw/event"].array(library="np")
+    volt_np = ak.to_numpy(tree["raw/volt"].array(library="ak"))
+    time_np = ak.to_numpy(tree["raw/time"].array(library="ak"))
+    scalar_data = {name: tree[path].array(library="np") for name, path in scalar_branches.items()}
 
 ch1_data, ch2_data = np.split(volt_np, 2, axis=1)
 time_data, _ = np.split(time_np, 2, axis=1)
@@ -37,19 +49,19 @@ output_dict = {
     "time": to_jagged_float32(time_data),
     "ch1": to_jagged_float32(ch1_data),
     "ch2": to_jagged_float32(ch2_data),
-    "ch3": to_jagged_float32(ch2_data),
 }
 branch_types = {
     "event": np.uint64,
     "time": "var * float32",
     "ch1": "var * float32",
     "ch2": "var * float32",
-    "ch3": "var * float32",
 }
+for name, values in scalar_data.items():
+    output_dict[name] = np.asarray(values, dtype=np.float64)
+    branch_types[name] = np.float64
 
 with uproot.recreate(output_file) as outfile:
     outfile.mktree("waves", branch_types)
     outfile["waves"].extend(output_dict)
 
 print(f"Successfully parsed into {output_file} with updated branches.")
-# python3 convertTCTtoRoot.py
